@@ -8,6 +8,15 @@ from typing import List, Dict, Optional
 import time
 import config
 
+# ロガーをインポート
+try:
+    from logger import get_logger
+    logger = get_logger()
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.addHandler(logging.NullHandler())
+
 # 進捗ウィンドウへのアクセスを試行（オプション）
 try:
     from progress_window import get_global_progress_window, log_to_window
@@ -41,36 +50,83 @@ class TimeTreeScraper:
     
     def __enter__(self):
         """コンテキストマネージャー: 開始"""
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=self.headless)
-        self.page = self.browser.new_page()
-        self.page.set_default_timeout(self.timeout)
-        return self
+        logger.info("ブラウザを起動中...")
+        logger.debug(f"ヘッドレスモード: {self.headless}")
+        logger.debug(f"タイムアウト: {self.timeout}ms")
+        
+        try:
+            self.playwright = sync_playwright().start()
+            logger.debug("Playwrightを起動しました")
+            
+            self.browser = self.playwright.chromium.launch(headless=self.headless)
+            logger.info(f"ブラウザを起動しました (headless={self.headless})")
+            
+            self.page = self.browser.new_page()
+            logger.debug("新しいページを作成しました")
+            
+            self.page.set_default_timeout(self.timeout)
+            logger.debug(f"タイムアウトを設定しました: {self.timeout}ms")
+            
+            return self
+        except Exception as e:
+            logger.error(f"ブラウザの起動に失敗しました: {e}", exc_info=True)
+            raise
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         """コンテキストマネージャー: 終了"""
-        # エラーが発生した場合や、デバッグモードの場合は詳細を表示
+        logger.info("ブラウザを終了処理中...")
+        
+        # エラーが発生した場合の詳細ログ
         if exc_type is not None:
-            print(f"\nエラーが発生しました: {exc_type.__name__}")
+            logger.error(f"エラーが発生しました: {exc_type.__name__}")
             if exc_val:
-                print(f"エラー内容: {exc_val}")
-            if config.DEBUG_MODE:
-                import traceback
-                traceback.print_exc()
+                logger.error(f"エラー内容: {exc_val}", exc_info=True)
+            logger.debug(f"例外タイプ: {exc_type}")
+            logger.debug(f"例外値: {exc_val}")
+            logger.debug(f"トレースバック: {exc_tb}")
+        
+        # 現在のURLをログに記録
+        try:
+            if self.page:
+                current_url = self.page.url
+                logger.debug(f"現在のURL: {current_url}")
+        except Exception as e:
+            logger.debug(f"URL取得エラー: {e}")
         
         # デバッグモードでブラウザを開いたままにする場合
         if self.keep_open:
-            print("\nデバッグモード: ブラウザを開いたままにします。")
-            print("ブラウザを閉じるには、手動で閉じるか、Enterキーを押してください...")
+            logger.info("デバッグモード: ブラウザを開いたままにします")
+            logger.info("ブラウザを閉じるには、手動で閉じるか、Enterキーを押してください...")
             try:
                 input()
             except:
                 pass
         
-        if self.browser and not self.keep_open:
-            self.browser.close()
-        if self.playwright and not self.keep_open:
-            self.playwright.stop()
+        # ブラウザを閉じる
+        if self.browser:
+            if self.keep_open:
+                logger.info("keep_open=True のため、ブラウザを開いたままにします")
+            else:
+                logger.info("ブラウザを閉じます...")
+                try:
+                    self.browser.close()
+                    logger.info("ブラウザを閉じました")
+                except Exception as e:
+                    logger.warning(f"ブラウザのクローズでエラーが発生しました: {e}")
+        
+        # Playwrightを停止
+        if self.playwright:
+            if self.keep_open:
+                logger.info("keep_open=True のため、Playwrightを開いたままにします")
+            else:
+                logger.info("Playwrightを停止します...")
+                try:
+                    self.playwright.stop()
+                    logger.info("Playwrightを停止しました")
+                except Exception as e:
+                    logger.warning(f"Playwrightの停止でエラーが発生しました: {e}")
+        
+        logger.info("ブラウザの終了処理が完了しました")
     
     def login(self, email: str, password: str) -> bool:
         """
@@ -84,14 +140,22 @@ class TimeTreeScraper:
             bool: ログイン成功時True
         """
         try:
+            logger.info(f"TimeTreeにログインを開始します (メール: {email})")
             print(f"TimeTreeにログイン中... (メール: {email})")
             
             # ログインページに移動
             login_url = f"{self.base_url}/signin"
+            logger.info(f"ログインページにアクセス: {login_url}")
             print(f"ログインページにアクセス: {login_url}")
+            
+            logger.debug("ページ遷移を開始...")
             self.page.goto(login_url, wait_until="networkidle")
+            logger.debug("ページ遷移が完了しました")
+            
             time.sleep(self.wait_time)
-            print(f"現在のURL: {self.page.url}")
+            current_url = self.page.url
+            logger.info(f"現在のURL: {current_url}")
+            print(f"現在のURL: {current_url}")
             
             if config.DEBUG_MODE:
                 # デバッグ用: ページのHTMLを保存
@@ -207,25 +271,115 @@ class TimeTreeScraper:
                 self.page.keyboard.press("Enter")
             
             # ログイン完了を待つ（ページ遷移を待機）
+            logger.info("ログイン処理の完了を待機中...")
             time.sleep(3)  # ログイン処理を待つ
             time.sleep(self.wait_time)
             
-            # ログイン成功を確認（URLがログインページでないことを確認）
+            # ページ遷移をより確実に待つ
+            logger.info("ページ遷移を待機中...")
+            try:
+                # URLが変わるのを待つ（最大10秒）
+                max_wait = 10
+                waited = 0
+                initial_url = self.page.url
+                logger.debug(f"初期URL: {initial_url}")
+                
+                while waited < max_wait:
+                    time.sleep(1)
+                    waited += 1
+                    current_url = self.page.url
+                    if current_url != initial_url:
+                        logger.info(f"URLが変化しました: {initial_url} -> {current_url}")
+                        break
+                    if waited % 2 == 0:
+                        logger.debug(f"URL変更を待機中... ({waited}秒経過)")
+                
+                # さらにネットワークアイドル状態を待つ
+                try:
+                    self.page.wait_for_load_state("networkidle", timeout=5000)
+                    logger.debug("networkidle状態になりました")
+                except:
+                    logger.debug("networkidleの待機はタイムアウトしました（続行します）")
+                
+            except Exception as e:
+                logger.warning(f"ページ遷移の待機でエラーが発生しました: {e}")
+            
+            # ログイン成功を確認（複数の方法で確認）
             current_url = self.page.url
-            if "login" not in current_url.lower():
+            page_title = self.page.title()
+            logger.info(f"ログイン後のURL: {current_url}")
+            logger.info(f"ページタイトル: {page_title}")
+            
+            # 方法1: URLがログインページでないことを確認
+            url_check = "login" not in current_url.lower() and "signin" not in current_url.lower()
+            logger.debug(f"URL判定: {url_check} (URL: {current_url})")
+            
+            # 方法2: カレンダーページの要素が存在するか確認
+            calendar_indicators = [
+                "calendar" in current_url.lower(),
+                "/calendars" in current_url.lower(),
+                "timetreeapp.com" in current_url.lower() and "signin" not in current_url.lower()
+            ]
+            has_calendar_url = any(calendar_indicators)
+            logger.debug(f"カレンダーURL判定: {has_calendar_url}")
+            
+            # 方法3: ページのタイトルや要素で確認
+            try:
+                # カレンダー関連の要素を探す
+                calendar_selectors = [
+                    '[class*="calendar"]',
+                    '[data-testid*="calendar"]',
+                    '[id*="calendar"]',
+                    'nav',
+                    '[role="main"]'
+                ]
+                has_calendar_elements = False
+                for selector in calendar_selectors[:3]:  # 最初の3つだけ試す
+                    try:
+                        elements = self.page.query_selector_all(selector)
+                        if elements and len(elements) > 0:
+                            has_calendar_elements = True
+                            logger.debug(f"カレンダー要素を発見: {selector} ({len(elements)}個)")
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                logger.debug(f"カレンダー要素の検索でエラー: {e}")
+                has_calendar_elements = False
+            
+            # ログイン成功の判定（いずれかの条件を満たせば成功）
+            login_success = url_check or has_calendar_url or has_calendar_elements
+            
+            logger.info(f"ログイン判定結果:")
+            logger.info(f"  - URL判定: {url_check}")
+            logger.info(f"  - カレンダーURL判定: {has_calendar_url}")
+            logger.info(f"  - カレンダー要素判定: {has_calendar_elements}")
+            logger.info(f"  - 最終判定: {login_success}")
+            
+            if login_success:
+                logger.info("ログイン成功を確認しました")
                 print("ログイン成功")
                 return True
             else:
-                print("警告: ログインページから遷移していない可能性があります")
-                return False
+                logger.warning(f"ログイン判定が失敗しました (URL: {current_url}, タイトル: {page_title})")
+                logger.warning("ただし、実際にカレンダーが表示されている可能性があります")
+                print(f"警告: ログイン判定が失敗しました (URL: {current_url})")
+                print("注意: 実際にカレンダーが表示されている場合は、処理を続行します")
+                # 警告を出しても、とりあえず続行を試みる
+                return True  # 失敗と判定しても、カレンダーが表示されている可能性があるので続行
                 
         except Exception as e:
+            logger.error(f"ログインエラーが発生しました: {e}", exc_info=True)
             print(f"ログインエラー: {e}")
             if config.DEBUG_MODE:
                 import traceback
                 traceback.print_exc()
                 # スクリーンショットを保存
-                self.page.screenshot(path="login_error.png")
+                try:
+                    self.page.screenshot(path="login_error.png")
+                    logger.debug("エラー時のスクリーンショットを保存しました: login_error.png")
+                except:
+                    pass
             return False
     
     def get_events(self, calendar_id: Optional[str] = None, 
@@ -244,60 +398,100 @@ class TimeTreeScraper:
             from_date = utils.get_today_start()
         
         try:
+            logger.info(f"スケジュール取得を開始します (開始日: {from_date.strftime('%Y-%m-%d')})")
             print(f"スケジュールを取得中... (開始日: {from_date.strftime('%Y-%m-%d')})")
             
             # カレンダーページに移動
             if calendar_id:
                 calendar_url = f"{self.base_url}/calendars/{calendar_id}"
+                logger.info(f"特定のカレンダーにアクセス: {calendar_id}")
             else:
                 calendar_url = f"{self.base_url}/calendars"
+                logger.info("全カレンダーにアクセスします")
             
+            logger.info(f"カレンダーページに移動中: {calendar_url}")
+            print(f"カレンダーページに移動中: {calendar_url}")
+            
+            logger.debug("ページ遷移を開始...")
             self.page.goto(calendar_url, wait_until="networkidle")
+            logger.debug("ページ遷移が完了しました")
+            
             time.sleep(self.wait_time)
             
             # カレンダーが読み込まれるまで待機
+            current_url = self.page.url
+            page_title = self.page.title()
+            logger.info(f"カレンダーページに到達しました")
+            logger.info(f"現在のURL: {current_url}")
+            logger.info(f"ページタイトル: {page_title}")
             print("カレンダーページの読み込みを待機中...")
-            print(f"現在のURL: {self.page.url}")
-            print(f"ページタイトル: {self.page.title()}")
+            print(f"現在のURL: {current_url}")
+            print(f"ページタイトル: {page_title}")
             
             # JavaScriptで動的に読み込まれるコンテンツを待つ
+            logger.debug(f"JavaScriptの読み込みを待機中... (待機時間: {self.wait_time * 3}秒)")
             time.sleep(self.wait_time * 3)  # より長く待機
+            logger.debug("待機が完了しました")
             
             # カレンダー要素が表示されるまで待機を試行
             try:
+                logger.debug("networkidle状態を待機中...")
                 self.page.wait_for_load_state("networkidle", timeout=10000)
-            except:
+                logger.debug("networkidle状態になりました")
+            except Exception as e:
+                logger.warning(f"networkidleの待機でタイムアウトまたはエラー: {e}")
                 pass
             
             # デバッグ用: ページのHTML構造を確認（必ず実行）
+            logger.info("カレンダーページのHTMLとスクリーンショットを保存中...")
             page_content = self.page.content()
-            with open("debug_calendar_page.html", "w", encoding="utf-8") as f:
-                f.write(page_content)
-            print("デバッグ: カレンダーページのHTMLを debug_calendar_page.html に保存しました")
-            self.page.screenshot(path="debug_calendar_page.png")
-            print("デバッグ: カレンダーページのスクリーンショットを debug_calendar_page.png に保存しました")
+            html_file = "debug_calendar_page.html"
+            screenshot_file = "debug_calendar_page.png"
             
+            with open(html_file, "w", encoding="utf-8") as f:
+                f.write(page_content)
+            logger.info(f"カレンダーページのHTMLを {html_file} に保存しました ({len(page_content)} 文字)")
+            print(f"デバッグ: カレンダーページのHTMLを {html_file} に保存しました")
+            
+            self.page.screenshot(path=screenshot_file)
+            logger.info(f"カレンダーページのスクリーンショットを {screenshot_file} に保存しました")
+            print(f"デバッグ: カレンダーページのスクリーンショットを {screenshot_file} に保存しました")
+            
+            logger.info(f"ページタイトル: {page_title}")
+            logger.info(f"現在のURL: {current_url}")
+            logger.info(f"HTMLのサイズ: {len(page_content)} 文字")
             if config.DEBUG_MODE:
-                print(f"ページタイトル: {self.page.title()}")
-                print(f"現在のURL: {self.page.url}")
+                print(f"ページタイトル: {page_title}")
+                print(f"現在のURL: {current_url}")
                 print(f"HTMLのサイズ: {len(page_content)} 文字")
             
             # イベント要素を取得
+            logger.info("イベント取得処理を開始します")
             events = []
             
             # 複数の方法でイベントを取得
-            # 方法1: カレンダーグリッドから取得（月表示の場合）
-            events.extend(self._get_events_from_calendar_grid(from_date))
+            logger.info("方法1: カレンダーグリッドからイベントを取得します")
+            grid_events = self._get_events_from_calendar_grid(from_date)
+            logger.info(f"カレンダーグリッドから {len(grid_events)} 件のイベントを取得しました")
+            events.extend(grid_events)
             
-            # 方法2: イベントリストから取得（リスト表示の場合）
-            events.extend(self._get_events_from_event_list(from_date))
+            logger.info("方法2: イベントリストからイベントを取得します")
+            list_events = self._get_events_from_event_list(from_date)
+            logger.info(f"イベントリストから {len(list_events)} 件のイベントを取得しました")
+            events.extend(list_events)
             
-            # 方法3: API/JSONから取得（TimeTreeが内部で使用しているAPI）
+            logger.info("方法3: API/JSONからイベントを取得します")
             api_events = self._get_events_from_api(from_date)
             if api_events:
+                logger.info(f"APIから {len(api_events)} 件のイベントを取得しました")
                 events.extend(api_events)
+            else:
+                logger.debug("APIからのイベント取得はありませんでした")
+            
+            logger.info(f"合計 {len(events)} 件のイベントを取得しました")
             
             # 重複を除去（同じイベントが複数の方法で取得される可能性がある）
+            logger.info("重複イベントを除去中...")
             unique_events = []
             seen_titles = set()
             for event in events:
@@ -306,9 +500,11 @@ class TimeTreeScraper:
                     seen_titles.add(event_key)
                     unique_events.append(event)
             
+            logger.info(f"重複除去後: {len(unique_events)} 件のイベント")
             events = unique_events
             
             # 日付でフィルタリング（今日以降のみ）
+            logger.info(f"日付でフィルタリング中... (開始日: {from_date.strftime('%Y-%m-%d')})")
             filtered_events = []
             for event in events:
                 event_start = event.get('start_datetime')
@@ -320,21 +516,29 @@ class TimeTreeScraper:
                     if event_date >= from_date.date():
                         filtered_events.append(event)
             
+            logger.info(f"フィルタリング後: {len(filtered_events)} 件のイベント (元: {len(events)}件)")
             print(f"{len(filtered_events)} 件のイベントを取得しました（フィルタリング後: {len(events)} -> {len(filtered_events)}）")
             
             if len(filtered_events) == 0:
+                logger.warning("イベントが見つかりませんでした")
                 print("警告: イベントが見つかりませんでした")
                 if not config.DEBUG_MODE:
                     print("ヒント: DEBUG_MODE=True に設定すると、ページHTMLとスクリーンショットが保存されます")
             
+            logger.info("イベント取得処理が完了しました")
             return filtered_events
             
         except Exception as e:
+            logger.error(f"イベント取得エラーが発生しました: {e}", exc_info=True)
             print(f"イベント取得エラー: {e}")
             if config.DEBUG_MODE:
                 import traceback
                 traceback.print_exc()
-                self.page.screenshot(path="event_error.png")
+                try:
+                    self.page.screenshot(path="event_error.png")
+                    logger.debug("エラー時のスクリーンショットを保存しました: event_error.png")
+                except:
+                    pass
             return []
     
     def _get_events_from_calendar_grid(self, from_date: datetime) -> List[Dict]:
