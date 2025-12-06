@@ -83,6 +83,13 @@ def setup_logger(log_file: Optional[str] = None) -> logging.Logger:
         log_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         log_file = log_dir / f"timetree_export_{timestamp}.log"
+        
+        # 古いログファイルを削除（最新10個だけ保持）
+        try:
+            cleanup_old_logs(log_dir, max_logs=10)
+        except Exception as e:
+            # ログファイル削除エラーは無視（ログ出力前なのでprintを使用）
+            print(f"警告: 古いログファイルの削除でエラーが発生しました: {e}")
     
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
@@ -92,6 +99,32 @@ def setup_logger(log_file: Optional[str] = None) -> logging.Logger:
     logger.info(f"ログファイル: {log_file}")
     
     return logger
+
+
+def cleanup_old_logs(log_dir: Path, max_logs: int = 10, pattern: str = "timetree_export_*.log"):
+    """
+    古いログファイルを削除して、最新のN個だけ保持する
+    
+    Args:
+        log_dir: ログディレクトリ
+        max_logs: 保持するログファイルの最大数
+        pattern: ログファイルのパターン
+    """
+    try:
+        log_files = list(log_dir.glob(pattern))
+        if len(log_files) > max_logs:
+            # 更新日時でソート（新しい順）
+            log_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            # 古いログファイルを削除
+            for old_log in log_files[max_logs:]:
+                try:
+                    old_log.unlink()
+                except Exception as e:
+                    # 削除エラーは無視（ログ出力前なのでprintを使用）
+                    print(f"警告: ログファイル {old_log} の削除に失敗しました: {e}")
+    except Exception as e:
+        # エラーは無視（ログ出力前なのでprintを使用）
+        print(f"警告: ログファイルクリーンアップでエラーが発生しました: {e}")
 
 
 # グローバルロガー

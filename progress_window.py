@@ -27,12 +27,16 @@ class ProgressWindow:
         self.message_queue = queue.Queue()
         self.is_running = Event()
         self.thread: Optional[Thread] = None
+        self.confirmation_event: Optional[Event] = None
+        self.confirmation_button: Optional[tk.Button] = None
+        self.button_frame: Optional[tk.Frame] = None
         
     def _create_window(self):
         """ウィンドウを作成"""
         self.root = tk.Tk()
         self.root.title(self.title)
-        self.root.geometry("600x400")
+        self.root.geometry("800x600")  # ウィンドウサイズを大きく（幅800、高さ600）
+        self.root.minsize(700, 500)  # 最小サイズを設定
         self.root.resizable(True, True)
         
         # ステータスラベル
@@ -57,6 +61,10 @@ class ProgressWindow:
             state=tk.DISABLED
         )
         self.text_widget.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # ボタンフレーム（確認ボタン用）
+        self.button_frame = tk.Frame(self.root)
+        self.button_frame.pack(pady=5)
         
         # 閉じるボタン
         close_button = tk.Button(
@@ -100,6 +108,12 @@ class ProgressWindow:
                             self._append_log(content, tag="error")
                         elif msg_type == "warning":
                             self._append_log(content, tag="warning")
+                        elif msg_type == "confirmation":
+                            self._show_confirmation_button(
+                                content,
+                                message.get("button_text", "確認"),
+                                message.get("event")
+                            )
                 except queue.Empty:
                     break
         except Exception as e:
@@ -184,6 +198,124 @@ class ProgressWindow:
         """ウィンドウが閉じられるまで待機"""
         if self.thread:
             self.thread.join()
+    
+    def prepare_confirmation(self, message: str, button_text: str = "確認") -> Event:
+        """
+        確認ボタンを事前に表示し、Eventオブジェクトを返す
+        
+        Args:
+            message: 確認メッセージ
+            button_text: ボタンのテキスト
+            
+        Returns:
+            Event: 確認されるまで待機できるEventオブジェクト
+        """
+        confirmation_event = Event()
+        
+        # メッセージキューに確認要求を追加（即座にボタンを表示）
+        self.message_queue.put({
+            "type": "confirmation",
+            "content": message,
+            "button_text": button_text,
+            "event": confirmation_event
+        })
+        
+        return confirmation_event
+    
+    def wait_for_confirmation(self, message: str, button_text: str = "確認") -> bool:
+        """
+        ユーザーからの確認を待つ（スレッドセーフ）
+        
+        Args:
+            message: 確認メッセージ
+            button_text: ボタンのテキスト
+            
+        Returns:
+            bool: 確認された場合True
+        """
+        self.confirmation_event = Event()
+        
+        # メッセージキューに確認要求を追加
+        self.message_queue.put({
+            "type": "confirmation",
+            "content": message,
+            "button_text": button_text,
+            "event": self.confirmation_event
+        })
+        
+        # 確認されるまで待機（最大300秒 = 5分）
+        confirmed = self.confirmation_event.wait(timeout=300)
+        
+        return confirmed
+    
+    def _show_confirmation_button(self, message: str, button_text: str, event: Event):
+        """確認ボタンを表示（GUIスレッド内で実行）"""
+        if not self.button_frame:
+            return
+        
+        # メッセージをログに追加
+        self._append_log("", tag="log")
+        self._append_log("=" * 60, tag="log")
+        self._append_log(message, tag="warning")
+        self._append_log("=" * 60, tag="log")
+        
+        # 既存の確認ボタンを削除
+        if self.confirmation_button:
+            self.confirmation_button.destroy()
+        
+        # 確認ボタンを作成（大きく目立つように）
+        self.confirmation_button = tk.Button(
+            self.button_frame,
+            text=button_text,
+            command=lambda: self._on_confirmation_clicked(event),
+            bg="#2e7d32",
+            fg="white",
+            font=("Arial", 14, "bold"),
+            padx=50,
+            pady=15,
+            cursor="hand2"
+        )
+        self.confirmation_button.pack(pady=15)
+        
+        # ウィンドウを更新してボタンを確実に表示
+        self.root.update_idletasks()
+        
+        # ボタンが表示されるようにウィンドウを少し大きくする
+        current_width = self.root.winfo_width()
+        current_height = self.root.winfo_height()
+        if current_width < 700:
+            self.root.geometry(f"700x{current_height}")
+        if current_height < 550:
+            self.root.geometry(f"{current_width}x550")
+        
+        # ウィンドウを最前面に表示
+        self.root.lift()
+        self.root.attributes('-topmost', True)
+        self.root.after_idle(lambda: self.root.attributes('-topmost', False))
+        
+        # ボタンフレームが表示されるようにスクロール（必要に応じて）
+        if self.text_widget:
+            self.text_widget.see(tk.END)
+    
+    def _on_confirmation_clicked(self, event: Event):
+        """確認ボタンがクリックされた時の処理"""
+        if self.confirmation_button:
+            self.confirmation_button.config(state=tk.DISABLED, text="確認済み...")
+        
+        # イベントをセットして待機中のスレッドに通知
+        event.set()
+        
+        # 少し待ってからボタンを削除
+        if self.root:
+            self.root.after(1000, self._remove_confirmation_button)
+    
+    def _remove_confirmation_button(self):
+        """確認ボタンを削除"""
+        if self.confirmation_button:
+            self.confirmation_button.destroy()
+            self.confirmation_button = None
+        if self.root:
+            self.root.update_idletasks()
 
 
 # グローバルな進捗ウィンドウインスタンス（他のモジュールからアクセス可能）

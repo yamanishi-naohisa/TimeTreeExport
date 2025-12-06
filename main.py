@@ -82,16 +82,107 @@ def main():
                 
                 # ログイン
                 logger.info("ログイン処理を開始します")
-                login_result = scraper.login(config.TIMETREE_EMAIL, config.TIMETREE_PASSWORD)
+                progress_window.update_status("TimeTreeにログイン中...")
                 
-                if not login_result:
-                    logger.warning("ログイン判定が失敗しましたが、実際にカレンダーが表示されている可能性があります")
-                    logger.warning("処理を続行して、カレンダーページへのアクセスを試みます")
-                    progress_window.log_warning("ログイン判定が失敗しましたが、処理を続行します...")
-                    print("警告: ログイン判定が失敗しましたが、処理を続行します...")
+                # headlessモードかどうかで処理を分岐
+                if config.BROWSER_HEADLESS:
+                    # headlessモード: 自動判定のみ（ユーザー確認なし）
+                    logger.info("headlessモードでログインします（自動判定のみ）")
+                    progress_window.log("headlessモード: ログインを自動判定します...")
+                    
+                    try:
+                        login_success = scraper.login(config.TIMETREE_EMAIL, config.TIMETREE_PASSWORD)
+                        
+                        if login_success:
+                            logger.info("ログイン成功を確認しました（自動判定）")
+                            progress_window.log_success("ログイン成功を確認しました（自動判定）")
+                            progress_window.update_status("ログイン成功 - イベント取得を開始します...")
+                        else:
+                            error_msg = "ログイン判定が失敗しました"
+                            logger.error(error_msg)
+                            progress_window.log_error(error_msg)
+                            progress_window.update_status("ログイン失敗")
+                            print(error_msg)
+                            progress_window.close()
+                            sys.exit(1)
+                            
+                    except Exception as e:
+                        error_msg = f"ログイン処理でエラーが発生しました: {e}"
+                        logger.error(error_msg, exc_info=True)
+                        progress_window.log_error(error_msg)
+                        progress_window.update_status("ログイン失敗")
+                        print(error_msg)
+                        progress_window.close()
+                        sys.exit(1)
                 else:
-                    logger.info("ログインに成功しました")
-                    progress_window.log_success("ログイン成功")
+                    # 表示モード: ユーザー確認あり
+                    progress_window.log("")
+                    progress_window.log("=" * 60)
+                    progress_window.log("ログイン処理を開始します。")
+                    progress_window.log("ブラウザでログインが完了し、カレンダーが表示されたら")
+                    progress_window.log("「ログイン成功」ボタンをクリックしてください。")
+                    progress_window.log("=" * 60)
+                    
+                    # 確認ボタンを事前に表示（ログイン処理開始前に）
+                    confirmation_event = progress_window.prepare_confirmation(
+                        "ブラウザでログインが完了し、カレンダーが表示されたら「ログイン成功」ボタンをクリックしてください。",
+                        "ログイン成功"
+                    )
+                    
+                    # ボタンが表示されるまで少し待つ
+                    time.sleep(0.5)
+                    
+                    try:
+                        # ログイン処理を実行（自動判定は参考程度）
+                        login_success = scraper.login(config.TIMETREE_EMAIL, config.TIMETREE_PASSWORD)
+                        
+                        if login_success:
+                            logger.info("ログイン自動判定が成功しました")
+                            progress_window.log("ログイン自動判定が成功しました。")
+                        else:
+                            logger.warning("ログイン自動判定が失敗しましたが、ユーザー確認で続行可能です")
+                            progress_window.log_warning("ログイン自動判定が失敗しましたが、ブラウザで確認してください。")
+                        
+                        logger.info("ユーザーの確認を待機します...")
+                        progress_window.log("ログイン成功ボタンのクリックを待機中です...")
+                        progress_window.log("プログレスウィンドウを閉じないでください。ブラウザは開いたままです。")
+                        
+                        # ユーザーが確認ボタンをクリックするまで待機（ログイン処理中でも押せる）
+                        try:
+                            confirmed = confirmation_event.wait(timeout=300)  # 最大5分
+                            
+                            if confirmed:
+                                logger.info("ユーザーがログイン成功を確認しました")
+                                progress_window.log_success("ログイン成功を確認しました")
+                                progress_window.update_status("ログイン成功 - イベント取得を開始します...")
+                            else:
+                                logger.warning("ユーザー確認がタイムアウトしましたが、処理を続行します")
+                                progress_window.log_warning("確認がタイムアウトしましたが、処理を続行します...")
+                        except KeyboardInterrupt:
+                            # ログイン確認待機中にキャンセルされた場合でも、ブラウザは開いたままにする
+                            logger.warning("ログイン確認待機中に割り込みが発生しました")
+                            logger.info("ユーザーがログイン成功を確認したとみなして処理を続行します")
+                            try:
+                                progress_window.log_warning("割り込みが発生しましたが、処理を続行します...")
+                            except:
+                                pass  # プログレスウィンドウが閉じられている可能性がある
+                            confirmed = True  # 続行する
+                            
+                    except Exception as e:
+                        error_msg = f"ログイン処理でエラーが発生しました: {e}"
+                        logger.error(error_msg, exc_info=True)
+                        progress_window.log_error(error_msg)
+                        progress_window.update_status("ログイン失敗")
+                        print(error_msg)
+                        if config.BROWSER_KEEP_OPEN:
+                            progress_window.log_warning("ブラウザを開いたままにしてデバッグを続けます...")
+                            logger.info("BROWSER_KEEP_OPEN=True のため、ブラウザを開いたままにします")
+                            time.sleep(5)
+                        else:
+                            logger.info("3秒待機後、スクリプトを終了します")
+                            time.sleep(3)
+                            progress_window.close()
+                            sys.exit(1)
                 
                 # イベントを取得
                 logger.info("イベント取得処理を開始します")
@@ -99,12 +190,20 @@ def main():
                 calendar_id = config.TIMETREE_CALENDAR_ID if config.TIMETREE_CALENDAR_ID else None
                 logger.info(f"カレンダーID: {calendar_id if calendar_id else '全カレンダー'}")
                 
-                events = scraper.get_events(calendar_id=calendar_id, from_date=from_date)
-                
-                logger.info(f"イベント取得が完了しました。取得件数: {len(events)}件")
-                event_count_msg = f"{len(events)} 件のイベントを取得しました。"
-                progress_window.log_success(event_count_msg)
-                print(event_count_msg)
+                try:
+                    events = scraper.get_events(calendar_id=calendar_id, from_date=from_date)
+                    
+                    logger.info(f"イベント取得が完了しました。取得件数: {len(events)}件")
+                    event_count_msg = f"{len(events)} 件のイベントを取得しました。"
+                    progress_window.log_success(event_count_msg)
+                    print(event_count_msg)
+                except Exception as e:
+                    error_msg = f"イベント取得でエラーが発生しました: {e}"
+                    logger.error(error_msg, exc_info=True)
+                    progress_window.log_error(error_msg)
+                    progress_window.update_status("イベント取得エラー")
+                    print(error_msg)
+                    events = []  # 空のリストを返して処理を続行
             
             logger.info("=" * 60)
             logger.info("TimeTreeScraperのコンテキストマネージャーから出ます (withブロック終了)")
